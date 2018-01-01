@@ -21,7 +21,7 @@ from data_loader import get_loader
 
 
 parser = argparse.ArgumentParser(description='PyTorch Model Parameters')
-parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+parser.add_argument('--batch-size', type=int, default=2, metavar='N',
                     help='input batch size for training (default: 64)')
 parser.add_argument('--test-batch-size', type=int, default=50, metavar='w',
                     help='input batch size for testing (default: 50)')
@@ -37,16 +37,16 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
-parser.add_argument('--x1-maxlen', type=int, default=50, metavar='N',
+parser.add_argument('--x1-maxlen', type=int, default=150, metavar='N',
                     help='max length of symptom input')
-parser.add_argument('--x2-maxlen', type=int, default=10, metavar='N',
+parser.add_argument('--x2-maxlen', type=int, default=15, metavar='N',
                     help='max length of diagnose input')
 parser.add_argument('--dimention', type=int, default=100, metavar='N',
                     help='length of vector dimention')
-parser.add_argument('--sym-embedding-path', type=str, default='../../res/train_data_v2/sym_vec.npy')
-parser.add_argument('--diag-embedding-path', type=str, default='../../res/train_data_v2/diag_vec.npy')
-parser.add_argument('--train-path', type=str, default='../../res/train_data_v2/train_data.txt')
-parser.add_argument('--test-path', type=str, default='../../res/train_data_v2/test_data.txt')
+parser.add_argument('--sym-embedding-path', type=str, default='../../res/train_data_v3/symNpy.npy')
+parser.add_argument('--diag-embedding-path', type=str, default='../../res/train_data_v3/mentionNpy.npy')
+parser.add_argument('--train-path', type=str, default='../../res/train_data_v3/train_data.txt')
+parser.add_argument('--test-path', type=str, default='../../res/train_data_v3/test_data.txt')
 
 
 args = parser.parse_args()
@@ -64,68 +64,74 @@ class DynamicModel(nn.Module):
 
         # model parameters
         # local attention matrix
-        self.w_tensor = nn.Linear(50*100, 50*100)
-        self.u_tensor = nn.Linear(10*100, 10*100)
-        self.v_tensor = nn.Linear(50*10, 50*10)
+        self.w_tensor = nn.Linear(100, 100)
+        self.u_tensor = nn.Linear(100, 100)
+        self.v_tensor = nn.Linear(100, 1)
 
         # multi-task shared matrix
-        self.w2_tensor = nn.Linear(10*100, 10*100)
-        self.u2_tensor = nn.Linear(10*100, 10*100)
-        self.v2_tensor = nn.Linear(10*10, 10*10)
+        self.w2_tensor = nn.Linear(100, 100)
+        self.u2_tensor = nn.Linear(100, 100)
+        self.v2_tensor = nn.Linear(100, 1)
 
         # mlp matrix
-        self.fc1 = []
-        self.fc2 = []
-        for i in range(10):
-            self.fc1.append(nn.Linear(3*100, 1000))
-            self.fc2.append(nn.Linear(1000, 800))
+        #self.fc1 = []
+        #self.fc2 = []
+        #for i in range(15):
+        self.fc1 = nn.Linear(200, 600)
+        self.fc2 = nn.Linear(600, 588)
 
     def forward(self, x1, x2, x1_len, x2_len, Y):
 
         # x1: p*m  x2: q*m , padding with 0
         # x1_len: original length of x1    x2_len: original length of x2
         x1 = self.embedding_s(x1)
-        print(x1[0])
 
         # calculate W*S and extend to p*q*m
         w_tensor = self.w_tensor(x1)
-        w_tensor = w_tensor.expand(50,100,10)
+        w_tensor = w_tensor.expand(15,args.batch_size,150,100)
+        w_tensor = w_tensor.transpose(0,1)
+        #print(w_tensor)
 
         # calculate U*D and extend to p*q*m
+        x2 = self.embedding_d(x2)
         u_tensor = self.u_tensor(x2)
-        u_tensor = u_tensor.expand(10,100,50)
-        u_tensor = u_tensor.transpose(0,2)
+        u_tensor = u_tensor.expand(150,args.batch_size, 15, 100)
+        u_tensor = u_tensor.transpose(0,1)
+        u_tensor = u_tensor.transpose(1,2)
 
         # calculate local attention
         v_tensor = self.get_f_tensor(w_tensor, u_tensor)
         v_tensor = self.v_tensor(v_tensor)
+        v_tensor = v_tensor.view(args.batch_size, 15, 150)
         input = self.get_local_attention(v_tensor, x1, x1_len, x2_len)
 
         # calculate W_2*C extend to q*q*m
         w2_tensor = self.w2_tensor(input)
-        w2_tensor = w2_tensor.expand(10, 100, 10)
-        w2_tensor = w2_tensor.transpose(1,2)
+        w2_tensor = w2_tensor.expand(15, args.batch_size, 15, 100)
+        w2_tensor = w2_tensor.transpose(0,1)
 
         # calculate U_2*D extend to q*q*m
         u2_tensor = self.u2_tensor(x2)
-        u2_tensor = u2_tensor.expand(10, 100, 10)
-        u2_tensor = u2_tensor.transpose(1,2)
+        u2_tensor = u2_tensor.expand(15, args.batch_size, 15, 100)
+        u2_tensor = u2_tensor.transpose(0,1)
 
         # calculate shared info
         v2_tensor = self.get_f_tensor(w2_tensor, u2_tensor)
         v2_tensor = self.v2_tensor(v2_tensor)
+        v2_tensor = v2_tensor.view(args.batch_size, 15, 15)
         input_shared = self.get_shared_info(v2_tensor, input, x2, x2_len)
 
         # calculate mlp
         input_mlp = self.get_mlp_input(input, input_shared, x2, x2_len)
         output_tensor = []
-        for i in range(10):
-            input_fc1 = F.relu(self.fc1[i](input_mlp[:(i+1)*3, :]))
-            output = F.relu(self.fc2[i](input_fc1))
-            output = F.softmax(output)
-            output_tensor.append(output)
+        #print(input_mlp)
 
-        return output_tensor
+        #for i in range(15):
+        input_fc1 = F.relu(self.fc1(input_mlp))
+        output = F.relu(self.fc2(input_fc1))
+        output = F.softmax(output)
+
+        return output
 
     def get_f_tensor(self, w_tensor, u_tensor):
         """
@@ -138,28 +144,52 @@ class DynamicModel(nn.Module):
         f_tensor = F.tanh(f_tensor)
         return f_tensor
 
+    def get_idx_tensor(self, tensor_size, x1_len, x2_len, len1, len2):
+        """
+        Args:
+            tensor_size: batch_size * p * q
+            x1_len: original length of symptoms
+            x2_len: original length of mentions
+            return: idx_tensor, which x1_len * x2_len is 1, else is 0
+        """
+        idx_tensor = []
+        x1_len_data = x1_len.data
+        x2_len_data = x2_len.data
+        for batch in range(args.batch_size):
+            idx_numpy = [[0 for i in range(len1)] for j in range(len2)]
+            for i in range(x2_len_data[batch]):
+                for j in range(x1_len_data[batch]):
+                    idx_numpy[i][j] = 1
+            idx_tensor.append(idx_numpy)
+        idx_tensor = torch.from_numpy(np.array(idx_tensor).astype(np.float)).float()
+        return Variable(idx_tensor)
+
     def my_softmax(self, v_tensor, x1_len, x2_len):
         """
         Args:
             v_tensor: p * q * m
             return: p*q
         """
-        v_tensor = v_tensor[:x1_len, :x2_len]
-        v_tensor = F.softmax(v_tensor)
-        v_tensor = v_tensor.expand(50, 10)
-        return v_tensor
+        v_tensor = torch.exp(v_tensor)
+        idx_tensor = self.get_idx_tensor(v_tensor.size(), x1_len, x2_len, 150, 15)
+        v_tensor = torch.mul(v_tensor, idx_tensor)
+        v_tensor_sum = torch.sum(v_tensor, 2)
+        v_tensor_sum = v_tensor_sum.expand(150, args.batch_size, 15)
+        v_tensor_sum = v_tensor_sum.transpose(0, 1)
+        v_tensor_sum = v_tensor_sum.transpose(1,2)
+        alpha = torch.div(v_tensor, v_tensor_sum)
+        alpha[(alpha != alpha).detach()] = 0
+        return alpha
 
     def cal_attention(self, alpha, x, x1_len, x2_len):
         """
         Args:
-            alpha: p * q
+            alpha: q * p
             x:  p * m
-            return: x2_len * m
+            return: q * m
         """
-        x = x[:x1_len, :]
-        alpha = alpha[:x1_len, :x2_len]
-        alpha = alpha.transpose(0,1)
-        output = torch.matmul(alpha, x)
+        # q*p * p*m = q*m
+        output = torch.bmm(alpha, x)
         return output
 
     def get_local_attention(self, v_tensor, x1, x1_len, x2_len):
@@ -176,17 +206,51 @@ class DynamicModel(nn.Module):
         output = self.cal_attention(alpha, x1, x1_len, x2_len)
         return output
 
+    def get_diag(self, v_tensor):
+        v_tensor_diag = []
+        for i in range(args.batch_size):
+            tensor_diag = torch.diag(v_tensor[i])
+            v_tensor_diag.append(tensor_diag.data.numpy())
+        return Variable(torch.from_numpy(np.array(v_tensor_diag)))
+
+    def get_idx_tensor2(self, x2_len):
+        idx_tensor = []
+        x2_len_data = x2_len.data
+        for batch in range(args.batch_size):
+            idx = [0 for i in range(15)]
+            for j in range(x2_len_data[batch]):
+                idx[j] = 1
+            idx_tensor.append(idx)
+        idx_tensor = torch.from_numpy(np.array(idx_tensor).astype(np.float)).float()
+        return Variable(idx_tensor)
+
     def my_softmax2(self, v_tensor, x2_len):
-        v_tensor = v_tensor[:x2_len, :x2_len]
-        v_tensor = torch.Tensor([v_tensor[z].sum() - v_tensor[z][z] for z in range(len(v_tensor))])
-        v_tensor = F.softmax(v_tensor)
-        v_tensor = v_tensor.expand(10)
-        return v_tensor
+        """ compute weight of softmax """
+        v_tensor_diag = self.get_diag(v_tensor)
+        v_tensor_sum = torch.sum(v_tensor, 1)
+        v_tensor = v_tensor_sum - v_tensor_diag
+        v_tensor = torch.exp(v_tensor)
+        idx_tensor = self.get_idx_tensor2(x2_len)
+        v_tensor = torch.mul(v_tensor, idx_tensor)
+        v_tensor_sum = torch.sum(v_tensor, 1)
+        v_tensor_sum = v_tensor_sum.expand(15, args.batch_size)
+        v_tensor_sum = v_tensor_sum.transpose(0,1)
+        alpha = torch.div(v_tensor, v_tensor_sum)
+        alpha[(alpha != alpha).detach()] = 0
+        return alpha
 
     def cal_attention2(self, alpha, input, x2_len):
-        x = input[:x2_len, :]
-        alpha = alpha[:x2_len]
-        output = torch.matmul(alpha, x)
+        """
+        Args:
+            alpha: batch_size * q
+            input: batch_size * q * m
+            x2_len: batch_size * 1
+            return: batch_size * m
+        """
+        alpha = alpha.expand(1, args.batch_size, 15)
+        alpha = alpha.transpose(0,1)
+        output = torch.bmm(alpha, input)
+        output = output.view(args.batch_size, 100)
         return output
 
     def get_shared_info(self, v_tensor, input, x2, x2_len):
@@ -201,16 +265,17 @@ class DynamicModel(nn.Module):
         return output
 
     def get_mlp_input(self, input, input_shared, x2, x2_len):
-        x = input + input_shared
-        x += x2
+        input_shared = input_shared.expand(15, args.batch_size, 100)
+        input_shared = input_shared.transpose(0, 1)
+        x = torch.cat((input, input_shared), 2)
         return x
 
 
 # load symptom and diagnose embedding
 sym_np = pickle.load(open(args.sym_embedding_path, 'r'))
-sym_embedding = torch.from_numpy(sym_np.astype(np.double))
+sym_embedding = torch.from_numpy(sym_np.astype(np.double)).float()
 diag_np = pickle.load(open(args.diag_embedding_path, 'r'))
-diag_embedding = torch.from_numpy(diag_np.astype(np.double))
+diag_embedding = torch.from_numpy(diag_np.astype(np.double)).float()
 
 model = DynamicModel(sym_embedding, diag_embedding)
 
@@ -240,7 +305,7 @@ def train(epoch):
 
         if batch_idx % args.log_interval == 0:
             print('Train Epoch : {} [{}/{} ({:.0f}%)]\tloss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
+                epoch, batch_idx * len(Y), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), loss.data[0])
             )
 def test():
