@@ -16,18 +16,18 @@ class Dataset(data.Dataset):
         """ read source file from txt file """
         self.src = open(src_path).readlines()
         self.num_total_sap = len(self.src)
-        self.max_sym = 50
-        self.max_men = 10
-        self.max_sym_id = 6153
-        self.max_men_id = 544
-        self.max_ent_id = 500
+        self.max_sym = 150
+        self.max_men = 15
+        self.max_sym_id = 9549
+        self.max_men_id = 949
+        self.max_ent_id = 587
 
     def __len__(self):
         return self.num_total_sap
 
     def __getitem__(self, index):
         """ return one data pair (symptom, mentions, entitys) """
-        seg_list = self.src[index].split('@')
+        seg_list = self.src[index].split('\1')
         assert(len(seg_list) == 3)
         symptoms, mentions, entities = seg_list
         sym_lens = len(symptoms.split('\t'))
@@ -59,7 +59,7 @@ class Dataset(data.Dataset):
         return str
 
 
-def get_loader(file_path, batch_size=1):
+def get_loader(file_path, batch_size=2):
     """ return data loader for cusdom dataset """
 
     # build a custom dataset
@@ -73,10 +73,10 @@ def get_loader(file_path, batch_size=1):
 
 
 if __name__ == '__main__':
-    src_path = '../../res/train_data_v2/train_data.txt'
+    src_path = '../../res/train_data_v3/train_data.txt'
     data_loader = get_loader(src_path)
     data_iter = iter(data_loader)
     symptoms, mentions, entities, sym_lens, men_lens = next(data_iter)
     print symptoms
     print entities
-    print type(sym_lens), type(entities)
+    print sym_lens, type(entities)
